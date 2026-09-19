@@ -13,30 +13,49 @@ local function cwd_or_default(cwd)
   return vim.fn.getcwd()
 end
 
-local function lexical_normalize(path, base)
+local function path_is_absolute(path, win)
+  if win then
+    return path:match("^%a:/") ~= nil or path:sub(1, 2) == "//"
+  end
+  return path:sub(1, 1) == "/"
+end
+
+local function lexical_normalize(path, base, win)
   if type(path) ~= "string" or path == "" or vim.trim(path) == "" or path:find("%z") then
     return nil
   end
+  if win == nil then
+    win = package.config:sub(1, 1) == "\\"
+  end
   base = cwd_or_default(base)
-  if type(base) ~= "string" or base == "" or base:sub(1, 1) ~= "/" then
+  if type(base) ~= "string" or base == "" then
     return nil
   end
-  local joined = path
-  if path:sub(1, 1) ~= "/" then
-    joined = base:gsub("/$", "") .. "/" .. path
+  local normalize_opts = { expand_env = false, win = win }
+  base = vim.fs.normalize(base, normalize_opts)
+  if not path_is_absolute(base, win) then
+    return nil
   end
-  local parts = {}
-  for part in joined:gmatch("[^/]+") do
-    if part == ".." then
-      if #parts == 0 then
-        return nil
-      end
-      table.remove(parts)
-    elseif part ~= "." and part ~= "" then
-      parts[#parts + 1] = part
+  local normalized_path = vim.fs.normalize(path, normalize_opts)
+  local joined
+  if path_is_absolute(normalized_path, win) then
+    joined = normalized_path
+  elseif win and normalized_path:match("^%a:") then
+    return nil
+  elseif win and normalized_path:sub(1, 1) == "/" then
+    local drive = base:match("^(%a:)/")
+    if not drive then
+      return nil
     end
+    joined = drive .. normalized_path
+  else
+    joined = base:gsub("/$", "") .. "/" .. normalized_path
   end
-  return "/" .. table.concat(parts, "/")
+  local normalized = vim.fs.normalize(joined, normalize_opts)
+  if not path_is_absolute(normalized, win) then
+    return nil
+  end
+  return normalized
 end
 
 local function copy_env(env)
@@ -99,18 +118,22 @@ local function decode_json(text)
 end
 
 local recognized_item_fields = {
-  action = "string",
+  completed = "string",
   context = "string",
+  contexts = "string_list",
   created = "string",
+  done = "boolean",
   due = "string",
   id = "number_or_string",
   n = "number",
   priority = "string",
   project = "string",
+  projects = "string_list",
   raw = "string",
+  rec = "string",
+  t = "string",
+  tags = "string_list",
   text = "string",
-  done = "boolean",
-  completed = "boolean",
 }
 
 local function normalize_item(item)
@@ -128,17 +151,16 @@ local function normalize_item(item)
       normalized[key] = value
     elseif kind == "number_or_string" and (type(value) == "number" or type(value) == "string") then
       normalized[key] = value
-    end
-  end
-  if type(item.tags) == "table" and is_list(item.tags) then
-    local tags = {}
-    for _, tag in ipairs(item.tags) do
-      if type(tag) == "string" then
-        tags[#tags + 1] = tag
+    elseif kind == "string_list" and type(value) == "table" and is_list(value) then
+      local values = {}
+      for _, entry in ipairs(value) do
+        if type(entry) == "string" then
+          values[#values + 1] = entry
+        end
       end
-    end
-    if #tags == #item.tags then
-      normalized.tags = tags
+      if #values == #value then
+        normalized[key] = values
+      end
     end
   end
   return normalized
@@ -262,6 +284,9 @@ function M.decode_add(stdout)
     return nil, decoder_error("rejection", tostring(value.error or value.message or "Tuxedo rejected add")), "rejection"
   end
   local result = { ok = true }
+  if type(value.action) == "string" then
+    result.action = value.action
+  end
   if type(value.task) == "table" then
     local task = normalize_item(value.task)
     if task then
@@ -302,23 +327,49 @@ local function executable_error(message, capability, retryable)
   return raw_error("executable", interface_message(message, capability, nil), { retryable = retryable })
 end
 
+local function process_detail(stderr)
+  local detail = vim.trim(tostring(stderr or ""))
+  if detail == "" then
+    return nil
+  end
+  local ok, decoded = pcall(vim.json.decode, detail)
+  if ok and type(decoded) == "table" and not is_list(decoded) then
+    local decoded_detail = decoded.error or decoded.message
+    if type(decoded_detail) == "string" and decoded_detail ~= "" then
+      detail = decoded_detail
+    end
+  end
+  detail = detail:gsub("%s+", " ")
+  if vim.fn.strchars(detail) > 500 then
+    detail = vim.fn.strcharpart(detail, 0, 500) .. "…"
+  end
+  return detail
+end
+
 local function process_error(result, capability, mutating, version)
   local stderr = result and tostring(result.stderr or "") or ""
+  local detail = process_detail(stderr)
+  local function message(text)
+    if detail then
+      text = text .. ": " .. detail
+    end
+    return interface_message(text, capability, version)
+  end
   if result_timeout(result) then
-    return raw_error("timeout", interface_message("Tuxedo process timed out", capability, version), {
+    return raw_error("timeout", message("Tuxedo process timed out"), {
       stderr = stderr,
       indeterminate = mutating,
       retryable = not mutating,
     })
   end
   if result_signal(result) then
-    return raw_error("signal", interface_message("Tuxedo process was terminated by a signal", capability, version), {
+    return raw_error("signal", message("Tuxedo process was terminated by a signal"), {
       stderr = stderr,
       indeterminate = mutating,
       retryable = not mutating,
     })
   end
-  return raw_error("exit", interface_message("Tuxedo exited unsuccessfully", capability, version), {
+  return raw_error("exit", message("Tuxedo exited unsuccessfully"), {
     code = result and result.code,
     stderr = stderr,
     indeterminate = false,
@@ -363,7 +414,7 @@ local function prepare_context(context, capability, mutating)
   if target then
     local kind = target.kind
     if kind == "first_run" or kind == "invalid" then
-      return nil, raw_error("schema", interface_message("active Tuxedo session has no deterministic task file; finish choosing or creating a valid file before quick-add", capability, nil), { retryable = false })
+      return nil, raw_error("schema", interface_message("active Tuxedo session has no deterministic task file; exit it with q or :TuxedoClose, then reopen with an explicit file or valid TODO_FILE/TODO_DIR before quick-add", capability, nil), { retryable = false })
     end
     local path = target.path or target.target or target
     path = lexical_normalize(path, cwd)
@@ -525,13 +576,16 @@ local function cleanup_probe(dir)
 end
 
 function M.probe(executable)
-  local report = { tui = executable ~= nil, add = { ok = false }, list = { ok = false } }
+  local report = {
+    tui = { entrypoint = executable ~= nil, launch_probed = false },
+    add = { ok = false },
+    list = { ok = false },
+  }
   local version, version_error = M.version(executable)
   report.version = version
   report.version_error = version_error
   if not executable then
-    report.tui = false
-    report.tui_error = version_error
+    report.tui.error = version_error
     local failure = version_error or raw_error("executable", interface_message("Tuxedo executable is not available", "executable/TUI", nil), { retryable = true })
     report.add.error = failure
     report.list.error = failure
@@ -554,12 +608,11 @@ function M.probe(executable)
     end
     vim.fn.writefile({}, todo)
     vim.fn.writefile({}, done)
-    local env = {
-      TODO_FILE = todo,
-      TODO_DIR = dir,
-      DONE_FILE = done,
-      TUXEDO_NO_UPDATE_CHECK = "1",
-    }
+    local env = copy_env(vim.fn.environ()) or {}
+    env.TODO_FILE = todo
+    env.TODO_DIR = dir
+    env.DONE_FILE = done
+    env.TUXEDO_NO_UPDATE_CHECK = "1"
     local marker = "tuxedo-nvim-probe-" .. tostring((vim.uv and vim.uv.hrtime and vim.uv.hrtime()) or os.time())
     local add_result, add_run_error = run_sync(M.build_add_argv(executable, marker), {
       text = true,

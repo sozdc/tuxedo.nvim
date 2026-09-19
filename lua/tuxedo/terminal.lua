@@ -311,7 +311,7 @@ function M.open(opts)
   end
   if current_session and live(current_session) then
     if not same_requested_target(current_session, opts) then
-      local message = "a Tuxedo session is already open for a different task file; close it before opening another"
+      local message = "a Tuxedo session is already open for a different task file; exit it with q or run :TuxedoClose before opening another"
       notify(message, vim.log.levels.ERROR)
       return nil, message
     end
@@ -349,19 +349,31 @@ function M.toggle()
     record = nil
   end
   if not record then
-    return M.open({})
+    local opened, err = M.open({})
+    if not opened then
+      return nil, err
+    end
+    return "visible"
   end
   if valid_window(record.win) and vim.api.nvim_win_get_tabpage(record.win) == vim.api.nvim_get_current_tabpage() then
-    M.hide()
-    return nil
+    if not M.hide() then
+      return nil, "could not hide the Tuxedo session"
+    end
+    return "hidden"
   end
-  return M.open({})
+  local opened, err = M.open({})
+  if not opened then
+    return nil, err
+  end
+  return "visible"
 end
 
 function M.close()
-  if current_session then
-    cleanup_record(current_session, { stop_job = true })
+  if not current_session then
+    return false
   end
+  cleanup_record(current_session, { stop_job = true })
+  return true
 end
 
 function M.current()
@@ -371,6 +383,23 @@ function M.current()
   return nil
 end
 
+function M.status()
+  local record = M.current()
+  if not record then
+    return { state = "absent", visible = false }
+  end
+  local visible = valid_window(record.win)
+  return {
+    state = visible and "visible" or "hidden",
+    visible = visible,
+    target_kind = record.target.kind,
+    file = record.target.kind == "deterministic" and record.target.path or nil,
+    cwd = record.cwd,
+    buffer = record.buf,
+    job = record.job,
+  }
+end
+
 function M.context()
   local record = M.current()
   if not record then
@@ -378,7 +407,7 @@ function M.context()
   end
   return {
     cwd = record.cwd,
-    target = record.target,
+    target = vim.deepcopy(record.target),
     executable = record.executable,
     env = vim.deepcopy(record.env),
   }

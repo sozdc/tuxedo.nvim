@@ -32,7 +32,9 @@ function M.check()
   end
   vim.health.ok("Resolved executable: " .. executable)
 
-  local version_info, version_error = cli.version(executable)
+  local probe = cli.probe(executable)
+  local version_info = probe.version
+  local version_error = probe.version_error
   if not version_info then
     report_error(version_error)
   else
@@ -45,15 +47,14 @@ function M.check()
     end
   end
 
-  local probe = cli.probe(executable)
-  local installed = probe.version and (probe.version.display or probe.version.token or probe.version.raw) or (version_info and (version_info.display or version_info.token or version_info.raw)) or "unknown"
+  local installed = version_info and (version_info.display or version_info.token or version_info.raw) or "unknown"
   local function capability_message(message, capability)
     return string.format("%s (installed version: %s; expected interface: %s; failed capability: %s)", message, vim.trim(tostring(installed)), cli.expected_interface, capability)
   end
-  if probe.tui then
-    vim.health.ok("TUI launch capability available")
+  if probe.tui and probe.tui.entrypoint then
+    vim.health.info("TUI entry point resolved; interactive launch is not probed")
   else
-    report_error(probe.tui_error or { message = capability_message("TUI capability failed", "TUI") })
+    report_error(probe.tui and probe.tui.error or { message = capability_message("TUI entry point unavailable", "TUI executable") })
   end
   if probe.add and probe.add.ok then
     vim.health.ok("Native add JSON capability available")
@@ -65,9 +66,9 @@ function M.check()
   else
     local err = probe.list and probe.list.error
     if err then
-      vim.health.warn((err.message or tostring(err)) .. "; list is optional in V1 and TUI remains available")
+      vim.health.warn((err.message or tostring(err)) .. "; list is optional in V1 and does not affect the TUI entry point")
     else
-      vim.health.warn(capability_message("Native list JSON capability unavailable", "list JSON") .. "; list is optional in V1 and TUI remains available")
+      vim.health.warn(capability_message("Native list JSON capability unavailable", "list JSON") .. "; list is optional in V1 and does not affect the TUI entry point")
     end
   end
   if probe.cleanup_warning then
