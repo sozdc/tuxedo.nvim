@@ -19,7 +19,7 @@ With lazy.nvim:
 ```lua
 {
   "sozdc/tuxedo.nvim",
-  cmd = { "Tuxedo", "TuxedoToggle", "TuxedoClose", "TuxedoAdd" },
+  cmd = { "Tuxedo", "TuxedoClose", "TuxedoAdd" },
   opts = {},
 }
 ```
@@ -44,7 +44,6 @@ require("tuxedo").setup({
 Commands:
 
 - `:Tuxedo` opens or focuses the Tuxedo UI.
-- `:TuxedoToggle` hides or restores the same live terminal session.
 - `:TuxedoClose` stops and removes the current Tuxedo terminal session.
 - `:TuxedoAdd` prompts for a task and invokes Tuxedo's native `add` command.
 - `:TuxedoAdd write release notes` adds the supplied text without opening a prompt.
@@ -65,7 +64,7 @@ end)
 
 `open()`, `toggle()`, and `close()` return stable success/state values rather than the mutable internal terminal record. `status()` returns a detached snapshot with `state`, `visible`, `target_kind`, `file`, `cwd`, `buffer`, and `job`; changing the snapshot cannot affect the live session. The optional `add()` callback receives `(result, err)` asynchronously, including validation and Neovim-version failures. Successful results preserve `ok`, `action`, and Tuxedo's documented task fields, including project/context arrays and recurrence metadata.
 
-Toggle preserves the terminal buffer and Tuxedo process. This intentionally keeps navigation/filter state and allows Tuxedo's documented external-file polling to notice tasks added through `:TuxedoAdd` without restarting the UI. Closing the floating window externally is also treated as a hide; the same process is restored by the next `:Tuxedo`. Use `:TuxedoClose` when the process itself must stop or before switching task files.
+The Lua `toggle()` method preserves the terminal buffer and Tuxedo process. This intentionally keeps navigation/filter state and allows Tuxedo's documented external-file polling to notice tasks added through `:TuxedoAdd` without restarting the UI. Closing the floating window externally is also treated as a hide; the same process is restored by the next `:Tuxedo`. Use `:TuxedoClose` when the process itself must stop or before switching task files.
 
 A requested explicit file is canonicalized before launch and passed as Tuxedo's optional positional `FILE`, even when its relative name resembles `add`, `ls`, `update`, `--sample`, or begins with `-`. Tuxedo remains responsible for opening, creating, and interpreting the file.
 

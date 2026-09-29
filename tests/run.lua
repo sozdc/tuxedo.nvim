@@ -535,6 +535,7 @@ test("commands expose close and direct quick-add text", function()
     vim.g.loaded_tuxedo_nvim = nil
     dofile("plugin/tuxedo.lua")
     local commands = vim.api.nvim_get_commands({ builtin = false })
+    eq(commands.TuxedoToggle, nil)
     ok(commands.TuxedoClose ~= nil)
     eq(commands.TuxedoAdd.nargs, "*")
     vim.cmd("TuxedoAdd task from command")

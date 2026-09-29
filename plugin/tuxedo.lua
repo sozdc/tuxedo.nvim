@@ -9,10 +9,6 @@ vim.api.nvim_create_user_command("Tuxedo", function()
   tuxedo.open()
 end, { nargs = 0, desc = "Open the Tuxedo task terminal" })
 
-vim.api.nvim_create_user_command("TuxedoToggle", function()
-  tuxedo.toggle()
-end, { nargs = 0, desc = "Toggle the Tuxedo task terminal" })
-
 vim.api.nvim_create_user_command("TuxedoClose", function()
   tuxedo.close()
 end, { nargs = 0, desc = "Close the Tuxedo task terminal session" })
